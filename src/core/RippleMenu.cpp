@@ -16,15 +16,7 @@ static float rnd(float a, float b) {
 }
 
 RippleMenu::~RippleMenu() {
-    releasePrio();
     if (s_open == this) s_open = nullptr;
-}
-
-void RippleMenu::releasePrio() {
-    if (m_prioHeld) {
-        CCDirector::get()->getTouchDispatcher()->decrementForcePrio(2);
-        m_prioHeld = false;
-    }
 }
 
 RippleMenu* RippleMenu::open() {
@@ -44,7 +36,6 @@ RippleMenu* RippleMenu::open() {
 }
 
 void RippleMenu::close() {
-    releasePrio();
     this->setKeypadEnabled(false);
     this->setTouchEnabled(false);
     if (s_open == this) s_open = nullptr;
@@ -139,8 +130,6 @@ bool RippleMenu::init() {
 
     this->setTouchEnabled(true);
     this->setKeypadEnabled(true);
-    CCDirector::get()->getTouchDispatcher()->incrementForcePrio(2);
-    m_prioHeld = true;
     return true;
 }
 

@@ -24,11 +24,9 @@ protected:
     RippleButton* m_pressed = nullptr;
     int m_current = -1;
     float m_time = 0.f;
-    bool m_prioHeld = false;
 
     bool init() override;
     void selectTab(int idx);
-    void releasePrio();
     RippleButton* findButton(CCPoint const& p);
 
     void update(float dt) override;

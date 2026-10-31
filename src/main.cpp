@@ -62,10 +62,11 @@ class $modify(RippleBaseLayer, GJBaseGameLayer) {
         GJBaseGameLayer::handleButton(down, button, isPlayer1);
     }
 
-    void processCommands(float dt) {
-        bool play = this->inPlayLayer();
+    void processCommands(float dt, bool isHalfTick, bool isLastTick) {
+        // count/inject once per full physics step, not on half ticks
+        bool play = !isHalfTick && this->inPlayLayer();
         if (play) ReplayEngine::get().beforeStep(this);
-        GJBaseGameLayer::processCommands(dt);
+        GJBaseGameLayer::processCommands(dt, isHalfTick, isLastTick);
         if (play) ReplayEngine::get().afterStep();
     }
 };
