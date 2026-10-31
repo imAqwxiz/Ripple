@@ -1,5 +1,6 @@
 #include "ReplaysTab.hpp"
 #include "ReplayEngine.hpp"
+#include "SavePopup.hpp"
 
 namespace ripple {
 
@@ -23,8 +24,12 @@ bool ReplaysTab::build() {
         updateStatus();
     });
     addButton("Save", {222.f, y}, {bw, bh}, theme::kDeep, [this] {
-        if (ReplayEngine::get().save()) refresh();
-        else updateStatus();
+        if (ReplayEngine::get().actionCount() == 0) {
+            ReplayEngine::get().setMessage("Nothing to save - record first");
+            updateStatus();
+            return;
+        }
+        SavePopup::open([this] { refresh(); });
     });
 
     addLabel("Saved macros", {s.width / 2.f, 111.f}, 0.35f, theme::kFoam);
@@ -94,9 +99,9 @@ void ReplaysTab::updateStatus() {
     } else if (e.mode() == ReplayMode::Replaying) {
         status = fmt::format("Replaying... frame {}", e.frame());
     } else if (e.pending() == ReplayMode::Recording) {
-        status = "Armed: start or restart a level to record";
+        status = "Armed: restart the level from the start";
     } else if (e.pending() == ReplayMode::Replaying) {
-        status = "Armed: start or restart a level to replay";
+        status = "Armed: restart the level from the start";
     } else {
         status = e.message().empty() ? "Idle" : e.message();
     }

@@ -1,10 +1,11 @@
 #include "ReplayEngine.hpp"
 #include <algorithm>
 #include <cctype>
-#include <ctime>
 #include <fstream>
 
 namespace ripple {
+
+static constexpr char const* kExt = ".rpl";
 
 ReplayEngine& ReplayEngine::get() {
     static ReplayEngine instance;
@@ -42,23 +43,40 @@ void ReplayEngine::stop() {
     m_message = "Stopped";
 }
 
-bool ReplayEngine::save() {
+std::string ReplayEngine::sanitizeName(std::string name) {
+    std::string out;
+    for (char c : name) {
+        auto u = static_cast<unsigned char>(c);
+        if (u < 32 || std::string("\\/:*?\"<>|").find(c) != std::string::npos) continue;
+        out += c;
+    }
+    // trim spaces and dots at both ends
+    auto bad = [](char c) { return c == ' ' || c == '.'; };
+    while (!out.empty() && bad(out.back())) out.pop_back();
+    size_t start = 0;
+    while (start < out.size() && bad(out[start])) ++start;
+    out = out.substr(start);
+    if (out.size() > 48) out.resize(48);
+    while (!out.empty() && bad(out.back())) out.pop_back();
+    if (out.empty()) out = "macro";
+    return out;
+}
+
+SaveResult ReplayEngine::save(std::string const& rawName, bool overwrite) {
     if (m_actions.empty()) {
         m_message = "Nothing to save";
-        return false;
+        return SaveResult::Failed;
     }
-    std::string safe;
-    for (char c : m_levelName) {
-        if (std::isalnum(static_cast<unsigned char>(c))) safe += c;
-    }
-    if (safe.empty()) safe = "macro";
+    auto name = sanitizeName(rawName);
+    auto file = saveDir() / (name + kExt);
 
-    auto file = saveDir() / fmt::format("{}_{}_{}.ripple", safe, m_levelId,
-                                        static_cast<long long>(std::time(nullptr)));
+    std::error_code ec;
+    if (!overwrite && std::filesystem::exists(file, ec)) return SaveResult::Exists;
+
     std::ofstream out(file);
     if (!out) {
         m_message = "Could not write file";
-        return false;
+        return SaveResult::Failed;
     }
     out << "RIPPLE 1\n";
     out << "level " << m_levelId << "\n";
@@ -69,9 +87,9 @@ bool ReplayEngine::save() {
     }
     out.close();
 
-    m_name = file.stem().string();
+    m_name = name;
     m_message = "Saved";
-    return true;
+    return SaveResult::Saved;
 }
 
 bool ReplayEngine::load(std::filesystem::path const& path) {
@@ -117,7 +135,9 @@ std::vector<std::filesystem::path> ReplayEngine::listSaved() {
     std::error_code ec;
     for (auto const& entry : std::filesystem::directory_iterator(saveDir(), ec)) {
         std::error_code e2;
-        if (!entry.is_regular_file(e2) || entry.path().extension() != ".ripple") continue;
+        if (!entry.is_regular_file(e2)) continue;
+        auto ext = entry.path().extension().string();
+        if (ext != ".rpl" && ext != ".ripple") continue; // .ripple = older test saves
         found.emplace_back(entry.last_write_time(e2), entry.path());
     }
     std::sort(found.begin(), found.end(), [](auto const& a, auto const& b) { return a.first > b.first; });
@@ -134,28 +154,51 @@ void ReplayEngine::releaseAll(GJBaseGameLayer* layer) {
     m_injecting = false;
 }
 
-void ReplayEngine::onReset(PlayLayer* pl) {
-    m_frame = 0;
-    m_index = 0;
+void ReplayEngine::onCheckpoint(int count) {
+    if (count <= 0) {
+        m_cpFrames.clear();
+        return;
+    }
+    while (static_cast<int>(m_cpFrames.size()) >= count) m_cpFrames.pop_back();
+    while (static_cast<int>(m_cpFrames.size()) < count - 1) m_cpFrames.push_back(0);
+    m_cpFrames.push_back(m_frame);
+}
 
-    if (m_pending != ReplayMode::Idle) {
+void ReplayEngine::onReset(PlayLayer* pl) {
+    int cps = (pl->m_isPracticeMode && pl->m_checkpointArray)
+                  ? static_cast<int>(pl->m_checkpointArray->count())
+                  : 0;
+
+    // Armed modes only start from the very beginning of the level (no checkpoint respawn).
+    if (m_pending != ReplayMode::Idle && cps == 0) {
         int id = pl->m_level->m_levelID.value();
         if (m_pending == ReplayMode::Replaying && m_levelId != 0 && m_levelId != id) {
             m_message = "This macro is for another level";
             m_pending = ReplayMode::Idle;
             m_mode = ReplayMode::Idle;
-            return;
+        } else {
+            m_mode = m_pending;
+            m_pending = ReplayMode::Idle;
+            if (m_mode == ReplayMode::Recording) {
+                m_levelId = id;
+                m_levelName = std::string(pl->m_level->m_levelName);
+                m_actions.clear();
+            }
+            m_message.clear();
+            m_cpFrames.clear();
         }
-        m_mode = m_pending;
-        m_pending = ReplayMode::Idle;
-        if (m_mode == ReplayMode::Recording) {
-            m_levelId = id;
-            m_levelName = std::string(pl->m_level->m_levelName);
-        }
-        m_message.clear();
     }
 
-    if (m_mode == ReplayMode::Recording) m_actions.clear();
+    // Practice mode: resume the frame counter from the checkpoint we respawned at.
+    while (static_cast<int>(m_cpFrames.size()) > cps) m_cpFrames.pop_back();
+    int start = (cps > 0 && !m_cpFrames.empty()) ? m_cpFrames.back() : 0;
+    m_frame = start;
+
+    auto it = std::lower_bound(m_actions.begin(), m_actions.end(), start,
+                               [](ReplayAction const& a, int f) { return a.frame < f; });
+    if (m_mode == ReplayMode::Recording) m_actions.erase(it, m_actions.end());
+    m_index = static_cast<size_t>(std::distance(m_actions.begin(), it));
+
     if (m_mode == ReplayMode::Replaying) releaseAll(pl);
 }
 
@@ -163,6 +206,7 @@ void ReplayEngine::onLevelEnd() {
     if (m_mode == ReplayMode::Recording) m_message = "Recording finished - press Save";
     else if (m_mode == ReplayMode::Replaying) m_message = "Replay finished";
     m_mode = ReplayMode::Idle;
+    m_cpFrames.clear();
 }
 
 bool ReplayEngine::allowButton(bool down, int button, bool player1) {

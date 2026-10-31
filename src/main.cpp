@@ -42,6 +42,10 @@ class $modify(RipplePlayLayer, PlayLayer) {
         PlayLayer::resetLevel();
         ReplayEngine::get().onReset(this);
     }
+    void storeCheckpoint(CheckpointObject* cp) {
+        PlayLayer::storeCheckpoint(cp);
+        ReplayEngine::get().onCheckpoint(m_checkpointArray ? static_cast<int>(m_checkpointArray->count()) : 0);
+    }
     void levelComplete() {
         PlayLayer::levelComplete();
         ReplayEngine::get().onLevelEnd();
